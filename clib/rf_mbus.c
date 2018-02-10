@@ -35,6 +35,12 @@ uint8_t  mbus_mode = WMBUS_NONE;
 RXinfoDescr RXinfo;
 TXinfoDescr TXinfo;
 
+// MJ Filter
+#define FILTER_ENTRY_SIZE       5
+#define FILTER_MAX_ENTRIES      20
+uint8 filter_no_entries = 0;
+uint8 filter_array[FILTER_MAX_ENTRIES*FILTER_ENTRY_SIZE];
+
 static void halRfReadFifo(uint8* data, uint8 length, uint8 *rssi, uint8 *lqi) {
   CC1100_ASSERT;
 
@@ -316,6 +322,19 @@ void rf_mbus_task(void) {
 
     if (rxStatus == PACKET_OK) {
 
+      if(filter_no_entries!=0) { // Apply filter
+        uint8_t found = 0;
+        for(uint8_t i = 0; i<filter_no_entries; i++) {
+          if(memcmp(&MBpacket[3],&filter_array[FILTER_ENTRY_SIZE*i],FILTER_ENTRY_SIZE)==0) {
+            found = 1;
+            break;
+          }
+        }
+        if(found==0) {
+          return;
+        }
+      }
+
       DC( 'b' );
 
       for (uint8_t i=0; i < packetSize(MBpacket[0]); i++) {
@@ -484,6 +503,22 @@ static void mbus_status(void) {
 }
 
 void rf_mbus_func(char *in) {
+  // MJ: Modify here to provide filter data
+  // Data needs to be stored in RAM
+  // Re-initialize after each boot
+  // Require efficient algorithm for comparison of incomming
+  // pakets against multiple filters
+      // MJ: Modify here to filter messages
+      // HKV: b..446850[\d]{8}
+      // HWM: b..446850[\d]{8}
+  // Filter size 14 bytes each
+  // Max. 15 filters = 210 bytes
+  // Start unfiltered by default
+  // After setting first filter working in filtered mode
+  // Protocol
+  // Start with b
+  // Next f
+  // Than 18 bytes for filter
   if((in[1] == 'r') && in[2]) {     // Reception on
     if(in[2] == 's') {
       rf_mbus_init(WMBUS_SMODE,RADIO_MODE_RX);
@@ -493,6 +528,30 @@ void rf_mbus_func(char *in) {
       rf_mbus_init(WMBUS_NONE,RADIO_MODE_NONE);
     }	
     
+  } else if(in[1] == 'f') {
+
+    if(in[2] == 's') {
+      if(filter_no_entries<FILTER_MAX_ENTRIES) {
+        for (uint8_t i = 0; i<FILTER_ENTRY_SIZE*2; i++) {
+          fromhex(in+3+(2*i), &filter_array[filter_no_entries*FILTER_ENTRY_SIZE+i], 1);
+        } 
+        DC( 'f' );
+        for (uint8_t i=0; i < FILTER_ENTRY_SIZE; i++) {
+          DH2( filter_array[filter_no_entries*FILTER_ENTRY_SIZE+i] );
+        }
+      
+        filter_no_entries++;
+
+      } else {
+        DS_P(PSTR("FILTER FULL"));
+      }
+    } else {
+      filter_no_entries=0;
+      DS_P(PSTR("FILTER RESET"));
+    }
+    DNL();
+    return;
+
   } else if(in[1] == 's') {         // Send
 
 #ifndef MBUS_NO_TX
